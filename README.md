@@ -4,6 +4,8 @@ One-screen gamified Pomodoro focus board. Work earns XP. Breaks drop the eyes, n
 
 Built for Hackyard Yard #3 (theme: **One Screen**). No routes, no tabs, no second page.
 
+**Repo:** [github.com/wyldephyre/questodoro](https://github.com/wyldephyre/questodoro)
+
 ## What it does
 
 - 25 / 5 timer on the board (change work and break lengths in place)
@@ -27,7 +29,7 @@ Posting sends **nick + high score** only.
 ## Demo (stranger, one screen)
 
 1. Open the live URL.
-2. Hit **Drill 15s** (optional — shortens the work block for a live demo).
+2. Hit **Drill 15s** (optional — 15s work / 20s break for a live demo).
 3. **Start**. When the work block ends, XP / level / streak / high score update in place.
 4. Enter a nick. **Post score** to the field board.
 
