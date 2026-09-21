@@ -1,0 +1,117 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --font-sans: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --color-bg: #0c0d0b;
+  --color-surface: #141612;
+  --color-well: #1b1e17;
+  --color-fg: #e8eadf;
+  --color-muted: #8b9080;
+  --color-olive: #7d8f4e;
+  --color-olive-bright: #93a85d;
+  --color-olive-fg: #0c0d0b;
+  --color-ember: #c45c26;
+  --color-danger: #b5463a;
+  --color-border: #2c2f26;
+
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+
+  --tracking-kicker: 0.22em;
+  --tracking-tight: -0.02em;
+  --tracking-display: 0.08em;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --motion-micro: 80ms;
+  --motion-quick: 150ms;
+  --motion-fast: 250ms;
+  --motion-slow: 400ms;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    color-scheme: dark;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background-color: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  background-image:
+    linear-gradient(
+      color-mix(in oklab, var(--color-olive) 7%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in oklab, var(--color-olive) 7%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 48px 48px;
+  background-position: center top;
+}
+
+.stagger-item {
+  opacity: 0;
+  transform: translateY(var(--motion-y-medium, 12px));
+  filter: blur(var(--motion-blur-sm, 2px));
+  animation: qd-enter var(--motion-slow) var(--ease-smooth-out) forwards;
+}
+
+.stagger-item:nth-child(1) {
+  animation-delay: 0ms;
+}
+.stagger-item:nth-child(2) {
+  animation-delay: 40ms;
+}
+.stagger-item:nth-child(3) {
+  animation-delay: 80ms;
+}
+.stagger-item:nth-child(4) {
+  animation-delay: 120ms;
+}
+
+@keyframes qd-enter {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stagger-item {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
