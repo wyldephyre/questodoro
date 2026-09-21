@@ -17,6 +17,8 @@
   --color-danger: #b5463a;
   --color-border: #2c2f26;
 
+  --max-width-board: 120rem;
+
   --radius-xs: 0.25rem;
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
@@ -107,11 +109,38 @@ body {
   }
 }
 
+.check-in-pulse {
+  animation: qd-check-in 1.8s var(--ease-out) infinite;
+}
+
+.claimed-stamp {
+  transform: rotate(-12deg);
+  letter-spacing: 0.18em;
+}
+
+@keyframes qd-check-in {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 color-mix(in oklab, var(--color-ember) 0%, transparent),
+      0 0 0 1px color-mix(in oklab, var(--color-fg) 8%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 6px color-mix(in oklab, var(--color-ember) 28%, transparent),
+      0 0 0 1px color-mix(in oklab, var(--color-fg) 8%, transparent);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .stagger-item {
     animation: none;
     opacity: 1;
     transform: none;
     filter: none;
+  }
+
+  .check-in-pulse {
+    animation: none;
   }
 }

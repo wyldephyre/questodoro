@@ -1,35 +1,38 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Eye,
-  Minus,
   Pause,
   Play,
-  Plus,
   RotateCcw,
   Send,
   Target,
   Trophy,
 } from "lucide-react";
 import { toast, Toaster } from "sonner";
+import { DurationStepper } from "@/components/questodoro/duration-stepper";
+import { MissionRunClock } from "@/components/questodoro/mission-run-clock";
+import { MissionsPanel } from "@/components/questodoro/missions-panel";
+import { PhyreMark } from "@/components/questodoro/mark";
+import { RewardsShelf } from "@/components/questodoro/rewards-shelf";
+import { TimerRing } from "@/components/questodoro/timer-ring";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { PhyreMark } from "@/components/questodoro/mark";
-import { TimerRing } from "@/components/questodoro/timer-ring";
 import {
   getLeaderboard,
   postScore,
   type BoardRow,
 } from "@/lib/questodoro/leaderboard";
+import { MISSION_XP } from "@/lib/questodoro/missions";
 import {
   DRILL_WORK_SECONDS,
   rankFromXp,
-  secondsToMinutesLabel,
   xpForWork,
 } from "@/lib/questodoro/rules";
-import { useQuestStore } from "@/lib/questodoro/store";
+import {
+  useQuestStore,
+} from "@/lib/questodoro/store";
 import { cn, formatMmSs } from "@/lib/utils";
 
-function playPing(kind: "work" | "break") {
+function playPing(kind: "work" | "break" | "mission") {
   if (typeof window === "undefined") return;
   if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   try {
@@ -37,7 +40,7 @@ function playPing(kind: "work" | "break") {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "square";
-    osc.frequency.value = kind === "work" ? 392 : 330;
+    osc.frequency.value = kind === "work" ? 392 : kind === "mission" ? 523 : 330;
     gain.gain.value = 0.035;
     osc.connect(gain);
     gain.connect(ctx.destination);
@@ -47,54 +50,6 @@ function playPing(kind: "work" | "break") {
   } catch {
     /* audio optional */
   }
-}
-
-function DurationStepper({
-  label,
-  seconds,
-  onMinutes,
-  disabled,
-}: {
-  label: string;
-  seconds: number;
-  onMinutes: (minutes: number) => void;
-  disabled: boolean;
-}) {
-  const display = secondsToMinutesLabel(seconds);
-  const minutes = Math.max(1, Math.round(seconds / 60));
-  return (
-    <div className="flex min-h-11 items-center justify-between gap-3 rounded-md bg-well px-3 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-fg)_10%,transparent)]">
-      <span className="font-display text-xs font-semibold uppercase tracking-kicker text-muted">
-        {label}
-      </span>
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          className="flex size-10 items-center justify-center rounded-sm text-fg hover:bg-surface disabled:opacity-40"
-          aria-label={`Decrease ${label}`}
-          disabled={disabled || minutes <= 1}
-          onClick={() => onMinutes(minutes - 1)}
-        >
-          <Minus className="size-4" />
-        </button>
-        <span className="w-10 text-center font-display text-lg font-semibold tabular-nums">
-          {display}
-        </span>
-        <button
-          type="button"
-          className="flex size-10 items-center justify-center rounded-sm text-fg hover:bg-surface disabled:opacity-40"
-          aria-label={`Increase ${label}`}
-          disabled={disabled || minutes >= (label === "Work" ? 90 : 30)}
-          onClick={() => onMinutes(minutes + 1)}
-        >
-          <Plus className="size-4" />
-        </button>
-        <span className="w-8 font-display text-xs uppercase tracking-wider text-muted">
-          {seconds < 60 ? "" : "min"}
-        </span>
-      </div>
-    </div>
-  );
 }
 
 function StatChip({
@@ -107,11 +62,11 @@ function StatChip({
   hint?: string;
 }) {
   return (
-    <div className="min-w-0 flex-1 rounded-md bg-well px-3 py-2 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-fg)_10%,transparent)]">
+    <div className="min-w-0 flex-1 rounded-md bg-well px-4 py-3 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-fg)_10%,transparent)]">
       <p className="font-display text-xs font-semibold uppercase tracking-kicker text-muted">
         {label}
       </p>
-      <p className="font-display text-2xl font-semibold leading-none text-fg tabular-nums">
+      <p className="font-display text-2xl font-semibold leading-none text-fg tabular-nums 2xl:text-3xl">
         {value}
       </p>
       {hint ? <p className="mt-1 text-xs text-muted">{hint}</p> : null}
@@ -134,9 +89,28 @@ export function QuestodoroBoard() {
   const nick = useQuestStore((s) => s.nick);
   const banner = useQuestStore((s) => s.banner);
   const lastXpGain = useQuestStore((s) => s.lastXpGain);
+  const lastMissionXp = useQuestStore((s) => s.lastMissionXp);
+  const missions = useQuestStore((s) => s.missions);
+  const rewards = useQuestStore((s) => s.rewards);
+  const selectedMissionId = useQuestStore((s) => s.selectedMissionId);
+  const missionStreak = useQuestStore((s) => s.missionStreak);
+  const completedIds = useQuestStore((s) => s.completedIds);
+  const missionRuns = useQuestStore((s) => s.missionRuns);
   const start = useQuestStore((s) => s.start);
   const pause = useQuestStore((s) => s.pause);
   const reset = useQuestStore((s) => s.reset);
+  const selectMission = useQuestStore((s) => s.selectMission);
+  const startMission = useQuestStore((s) => s.startMission);
+  const pauseMission = useQuestStore((s) => s.pauseMission);
+  const completeMission = useQuestStore((s) => s.completeMission);
+  const addMission = useQuestStore((s) => s.addMission);
+  const updateMission = useQuestStore((s) => s.updateMission);
+  const removeMission = useQuestStore((s) => s.removeMission);
+  const moveMission = useQuestStore((s) => s.moveMission);
+  const addReward = useQuestStore((s) => s.addReward);
+  const updateRewardTitle = useQuestStore((s) => s.updateRewardTitle);
+  const removeReward = useQuestStore((s) => s.removeReward);
+  const claimReward = useQuestStore((s) => s.claimReward);
   const setWorkMinutes = useQuestStore((s) => s.setWorkMinutes);
   const setBreakMinutes = useQuestStore((s) => s.setBreakMinutes);
   const armDrill = useQuestStore((s) => s.armDrill);
@@ -154,8 +128,10 @@ export function QuestodoroBoard() {
     hydrate();
   }, [hydrate]);
 
+  const missionLive = missionRuns.some((run) => run.runState === "running");
+
   useEffect(() => {
-    if (runState !== "running") return;
+    if (runState !== "running" && !missionLive) return;
     let frame = 0;
     const loop = () => {
       tick(Date.now());
@@ -163,7 +139,7 @@ export function QuestodoroBoard() {
     };
     frame = window.requestAnimationFrame(loop);
     return () => window.cancelAnimationFrame(frame);
-  }, [runState, tick]);
+  }, [runState, missionLive, tick]);
 
   useEffect(() => {
     if (!banner) return;
@@ -174,6 +150,7 @@ export function QuestodoroBoard() {
   useEffect(() => {
     if (!banner) return;
     if (banner.startsWith("WORK COMPLETE")) playPing("work");
+    if (banner.startsWith("MISSION COMPLETE")) playPing("mission");
     if (banner.startsWith("BREAK DONE")) playPing("break");
   }, [banner]);
 
@@ -198,10 +175,12 @@ export function QuestodoroBoard() {
   const totalMs =
     phase === "break" ? breakSeconds * 1000 : workSeconds * 1000;
   const locked = runState !== "stopped";
-  const onBreak = phase === "break";
   const drillArmed = workSeconds === DRILL_WORK_SECONDS;
   const nextBlockXp = xpForWork(workSeconds);
   const fillPct = Math.min(100, (rank.intoLevel / rank.xpPerLevel) * 100);
+  const liveRuns = missionRuns.filter(
+    (run) => run.runState === "running" || run.runState === "paused",
+  );
 
   async function onPostScore() {
     if (highScore < 1) {
@@ -228,7 +207,7 @@ export function QuestodoroBoard() {
   }
 
   return (
-    <main className="min-h-dvh bg-bg text-fg lg:h-dvh lg:overflow-hidden">
+    <main className="min-h-dvh bg-bg text-fg 2xl:h-dvh 2xl:overflow-hidden">
       <Toaster
         theme="dark"
         position="bottom-center"
@@ -236,23 +215,23 @@ export function QuestodoroBoard() {
           className: "font-sans !bg-surface !text-fg !border-border !rounded-md",
         }}
       />
-      <div className="mx-auto flex min-h-dvh max-w-6xl flex-col gap-4 px-4 py-4 sm:px-6 lg:h-dvh lg:gap-5 lg:py-5">
-        <header className="flex flex-col gap-3 border-b border-border pb-3 lg:flex-row lg:items-end lg:justify-between">
-          <div className="stagger-item flex items-center gap-3">
-            <PhyreMark className="size-12 shrink-0" />
+      <div className="mx-auto flex min-h-dvh w-full max-w-board flex-col gap-5 px-4 py-4 2xl:h-dvh 2xl:gap-6 2xl:px-10 2xl:py-6">
+        <header className="flex shrink-0 flex-col gap-4 border-b border-border pb-4 2xl:flex-row 2xl:items-end 2xl:justify-between">
+          <div className="stagger-item flex items-center gap-4">
+            <PhyreMark className="size-14 shrink-0" />
             <div>
               <p className="font-display text-xs font-semibold uppercase tracking-kicker text-olive">
                 Yard 3 · One Screen
               </p>
-              <h1 className="font-display text-4xl font-semibold leading-none tracking-display text-fg sm:text-5xl">
+              <h1 className="font-display text-5xl font-semibold leading-none tracking-display text-fg 2xl:text-6xl">
                 QUESTODORO
               </h1>
               <p className="mt-1 text-sm text-muted">
-                Gamified Pomodoro focus board. Work earns the rank. Oorah.
+                Work earns the rank. Missions are on demand. Oorah.
               </p>
             </div>
           </div>
-          <div className="stagger-item grid grid-cols-2 gap-2 sm:grid-cols-4 lg:max-w-xl lg:flex-1">
+          <div className="stagger-item grid w-full grid-cols-2 gap-3 sm:grid-cols-4 2xl:max-w-3xl 2xl:flex-1">
             <StatChip label="Level" value={rank.level} hint={`${rank.toNext} XP to next`} />
             <StatChip label="XP" value={totalXp} hint={`${todayXp} today`} />
             <StatChip label="Streak" value={streak} hint="Days with a finished work block" />
@@ -260,8 +239,23 @@ export function QuestodoroBoard() {
           </div>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-5 lg:gap-5">
-          <section className="stagger-item flex min-h-0 flex-col gap-4 rounded-xl bg-surface p-4 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-fg)_10%,transparent)] sm:p-5 lg:col-span-3">
+        <div className="flex shrink-0 flex-col gap-2">
+          <div className="h-2 overflow-hidden rounded-full bg-well">
+            <div
+              className="h-full rounded-full bg-olive transition-[width] duration-200 ease-out"
+              style={{ width: `${fillPct}%` }}
+            />
+          </div>
+          <p className="font-display text-xs uppercase tracking-wider text-muted">
+            Level {rank.level} · {rank.intoLevel} / {rank.xpPerLevel} · Work {nextBlockXp} XP ·
+            Mission +{MISSION_XP} XP
+            {lastXpGain > 0 ? ` · Last work +${lastXpGain}` : ""}
+            {lastMissionXp > 0 ? ` · Last mission +${lastMissionXp}` : ""}
+          </p>
+        </div>
+
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-5 2xl:grid-cols-3 2xl:gap-5">
+          <section className="stagger-item flex min-h-0 flex-col gap-4 rounded-xl bg-surface p-4 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-fg)_10%,transparent)] 2xl:p-6">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-muted">
                 <Target className="size-4 text-olive" />
@@ -274,75 +268,71 @@ export function QuestodoroBoard() {
               </p>
             </div>
 
-            <TimerRing
-              remainingMs={remainingMs}
-              totalMs={totalMs}
-              phase={phase}
-              runState={runState}
-            />
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4">
+              <TimerRing
+                remainingMs={remainingMs}
+                totalMs={totalMs}
+                phase={phase}
+                runState={runState}
+              />
 
-            <p
-              className={cn(
-                "text-center font-display text-sm font-semibold uppercase tracking-wider",
-                banner ? "text-olive" : "text-muted",
-              )}
-              aria-live="polite"
-            >
-              {banner ??
-                (onBreak
-                  ? "Eyes off the glass. Then back on the line."
-                  : runState === "paused"
-                    ? "Held. Resume when ready."
-                    : "Stand by. Start the work block.")}
-            </p>
-
-            {onBreak ? (
-              <div className="flex items-start gap-3 rounded-lg bg-well p-4 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-ember)_35%,transparent)]">
-                <Eye className="mt-0.5 size-5 shrink-0 text-ember" />
-                <div>
-                  <p className="font-display text-sm font-semibold uppercase tracking-wider text-fg">
-                    Eye-drop · 20 / 20 / 20
-                  </p>
-                  <p className="mt-1 text-sm leading-normal text-muted">
-                    Lock on a point 20 feet out for 20 seconds. Drop the
-                    glass, not the mission. Then get back on the line.
-                  </p>
+              {liveRuns.length > 0 ? (
+                <div className="flex w-full flex-col gap-2">
+                  {liveRuns.map((run) => (
+                    <MissionRunClock
+                      key={run.id}
+                      mission={missions.find((m) => m.id === run.id) ?? null}
+                      run={run}
+                      onPause={() => pauseMission(run.id)}
+                      onResume={() => startMission(run.id)}
+                    />
+                  ))}
                 </div>
-              </div>
-            ) : null}
+              ) : null}
 
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <DurationStepper
-                label="Work"
-                seconds={workSeconds}
-                onMinutes={setWorkMinutes}
-                disabled={locked}
-              />
-              <DurationStepper
-                label="Break"
-                seconds={breakSeconds}
-                onMinutes={setBreakMinutes}
-                disabled={locked}
-              />
+              <p
+                className={cn(
+                  "text-center font-display text-sm font-semibold uppercase tracking-wider",
+                  banner ? "text-olive" : "text-muted",
+                )}
+                aria-live="polite"
+              >
+                {banner ??
+                  (phase === "break"
+                    ? "Rest. Missions stay on demand."
+                    : runState === "paused"
+                      ? "Held. Resume when ready."
+                      : "Stand by. Start the work block.")}
+              </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {locked ? null : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <DurationStepper
+                  label="Work"
+                  seconds={workSeconds}
+                  onMinutes={setWorkMinutes}
+                  disabled={locked}
+                  maxMinutes={90}
+                />
+                <DurationStepper
+                  label="Break"
+                  seconds={breakSeconds}
+                  onMinutes={setBreakMinutes}
+                  disabled={locked}
+                  maxMinutes={30}
+                />
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3 2xl:grid-cols-4">
               {runState === "running" ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="col-span-2 sm:col-span-1"
-                  onClick={pause}
-                >
+                <Button type="button" variant="secondary" onClick={pause}>
                   <Pause />
                   Pause
                 </Button>
               ) : (
-                <Button
-                  type="button"
-                  className="col-span-2 sm:col-span-1"
-                  onClick={start}
-                >
+                <Button type="button" onClick={start}>
                   <Play className="ml-0.5" />
                   {runState === "paused" ? "Resume" : "Start"}
                 </Button>
@@ -354,7 +344,7 @@ export function QuestodoroBoard() {
               <Button
                 type="button"
                 variant="ghost"
-                className="col-span-2 sm:col-span-2"
+                className="col-span-2 2xl:col-span-2"
                 disabled={locked}
                 onClick={armDrill}
               >
@@ -366,50 +356,34 @@ export function QuestodoroBoard() {
             </p>
           </section>
 
-          <aside className="stagger-item flex min-h-0 flex-col gap-4 lg:col-span-2">
-            <section className="rounded-xl bg-surface p-4 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-fg)_10%,transparent)] sm:p-5">
-              <p className="font-display text-xs font-semibold uppercase tracking-kicker text-olive">
-                Dossier
-              </p>
-              <div className="mt-3">
-                <div className="mb-1 flex items-center justify-between font-display text-xs uppercase tracking-wider text-muted">
-                  <span>Level {rank.level}</span>
-                  <span className="tabular-nums">
-                    {rank.intoLevel} / {rank.xpPerLevel}
-                  </span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-well">
-                  <div
-                    className="h-full rounded-full bg-olive transition-[width] duration-200 ease-out"
-                    style={{ width: `${fillPct}%` }}
-                  />
-                </div>
-              </div>
-              <ul className="mt-4 space-y-2 text-sm leading-normal text-muted">
-                <li>
-                  Finish a <span className="text-fg">work</span> block:{" "}
-                  <span className="text-fg tabular-nums">
-                    {nextBlockXp} XP
-                  </span>{" "}
-                  (4 XP per minute, minimum 4).
-                </li>
-                <li>
-                  Level = 1 + floor(total XP / 200).
-                </li>
-                <li>
-                  Streak counts consecutive days with at least one finished work
-                  block.
-                </li>
-                <li>
-                  High score = most XP earned in a single day.
-                  {lastXpGain > 0 ? (
-                    <span className="text-ember"> Last gain +{lastXpGain}.</span>
-                  ) : null}
-                </li>
-              </ul>
-            </section>
+          <MissionsPanel
+            className="stagger-item"
+            missions={missions}
+            selectedId={selectedMissionId}
+            completedIds={completedIds}
+            missionStreak={missionStreak}
+            missionRuns={missionRuns}
+            onSelect={selectMission}
+            onAdd={addMission}
+            onUpdate={updateMission}
+            onRemove={removeMission}
+            onMove={moveMission}
+            onStart={startMission}
+            onPause={pauseMission}
+            onComplete={completeMission}
+          />
 
-            <section className="flex min-h-0 flex-1 flex-col rounded-xl bg-surface p-4 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-fg)_10%,transparent)] sm:p-5">
+          <div className="stagger-item flex min-h-0 flex-col gap-5">
+            <RewardsShelf
+              className="flex-1"
+              rewards={rewards}
+              onAdd={addReward}
+              onRename={updateRewardTitle}
+              onRemove={removeReward}
+              onClaim={claimReward}
+            />
+
+            <section className="flex min-h-0 flex-1 flex-col rounded-xl bg-surface p-5 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-fg)_10%,transparent)]">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Trophy className="size-4 text-olive" />
@@ -425,12 +399,8 @@ export function QuestodoroBoard() {
                       : "Live"}
                 </p>
               </div>
-              <p className="mt-1 text-xs text-muted">
-                Posts your high score (best single day). No accounts. Nick is a
-                public handle only.
-              </p>
 
-              <ol className="mt-3 min-h-40 flex-1 space-y-1 overflow-auto">
+              <ol className="mt-3 min-h-0 flex-1 space-y-1 overflow-auto">
                 {boardState === "loading" ? (
                   <li className="text-sm text-muted">Pulling the board…</li>
                 ) : rows.length === 0 ? (
@@ -461,13 +431,12 @@ export function QuestodoroBoard() {
 
               {boardState === "offline" ? (
                 <p className="mt-2 text-xs text-ember">
-                  Board unreachable. Local XP, level, streak, and high score
-                  still count on this device.
+                  Board unreachable. Local score still counts on this device.
                 </p>
               ) : null}
 
               <form
-                className="mt-3 flex flex-col gap-2 sm:flex-row"
+                className="mt-3 flex gap-2"
                 onSubmit={(event) => {
                   event.preventDefault();
                   void onPostScore();
@@ -495,7 +464,7 @@ export function QuestodoroBoard() {
                 </Button>
               </form>
             </section>
-          </aside>
+          </div>
         </div>
       </div>
     </main>

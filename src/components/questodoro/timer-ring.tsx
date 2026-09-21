@@ -27,9 +27,11 @@ export function TimerRing({
   const onBreak = phase === "break";
   const label =
     phase === "break" ? "BREAK" : phase === "work" || running ? "WORK" : "STAND BY";
+  const status =
+    runState === "paused" ? "Paused" : running ? "Counting" : "Ready";
 
   return (
-    <div className="relative mx-auto aspect-square w-full max-w-64">
+    <div className="relative mx-auto aspect-square w-full max-w-80 2xl:max-w-[22rem]">
       <svg
         viewBox={`0 0 ${SIZE} ${SIZE}`}
         className="size-full"
@@ -86,15 +88,11 @@ export function TimerRing({
         <p className="font-display text-xs font-semibold uppercase tracking-kicker text-muted">
           {label}
         </p>
-        <p className="font-display text-5xl font-semibold leading-none tracking-tight text-fg tabular-nums sm:text-6xl">
+        <p className="font-display text-6xl font-semibold leading-none tracking-tight text-fg tabular-nums 2xl:text-7xl">
           {formatMmSs(remainingMs)}
         </p>
         <p className="font-display text-xs uppercase tracking-wider text-muted">
-          {runState === "paused"
-            ? "Paused"
-            : running
-              ? "Counting"
-              : "Ready"}
+          {status}
         </p>
       </div>
     </div>
