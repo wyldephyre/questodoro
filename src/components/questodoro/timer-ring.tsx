@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { formatMmSs } from "@/lib/utils";
 import type { Phase, RunState } from "@/lib/questodoro/store";
 
@@ -14,7 +15,7 @@ const CY = 120;
 const R = 98;
 const CIRC = 2 * Math.PI * R;
 
-export function TimerRing({
+export const TimerRing = memo(function TimerRing({
   remainingMs,
   totalMs,
   phase,
@@ -97,4 +98,4 @@ export function TimerRing({
       </div>
     </div>
   );
-}
+});

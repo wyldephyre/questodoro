@@ -21,7 +21,7 @@ import {
   postScore,
   type BoardRow,
 } from "@/lib/questodoro/leaderboard";
-import { MISSION_XP } from "@/lib/questodoro/missions";
+import { SIDE_XP_DAILY_CAP } from "@/lib/questodoro/missions";
 import {
   DRILL_WORK_SECONDS,
   rankFromXp,
@@ -94,6 +94,7 @@ export function QuestodoroBoard() {
   const rewards = useQuestStore((s) => s.rewards);
   const selectedMissionId = useQuestStore((s) => s.selectedMissionId);
   const missionStreak = useQuestStore((s) => s.missionStreak);
+  const sideXpToday = useQuestStore((s) => s.sideXpToday);
   const completedIds = useQuestStore((s) => s.completedIds);
   const missionRuns = useQuestStore((s) => s.missionRuns);
   const start = useQuestStore((s) => s.start);
@@ -114,7 +115,8 @@ export function QuestodoroBoard() {
   const setWorkMinutes = useQuestStore((s) => s.setWorkMinutes);
   const setBreakMinutes = useQuestStore((s) => s.setBreakMinutes);
   const armDrill = useQuestStore((s) => s.armDrill);
-  const tick = useQuestStore((s) => s.tick);
+  const tickClock = useQuestStore((s) => s.tickClock);
+  const tickMissions = useQuestStore((s) => s.tickMissions);
   const setNick = useQuestStore((s) => s.setNick);
   const clearBanner = useQuestStore((s) => s.clearBanner);
 
@@ -131,15 +133,26 @@ export function QuestodoroBoard() {
   const missionLive = missionRuns.some((run) => run.runState === "running");
 
   useEffect(() => {
-    if (runState !== "running" && !missionLive) return;
+    if (runState !== "running") return;
     let frame = 0;
     const loop = () => {
-      tick(Date.now());
+      tickClock(Date.now());
       frame = window.requestAnimationFrame(loop);
     };
     frame = window.requestAnimationFrame(loop);
     return () => window.cancelAnimationFrame(frame);
-  }, [runState, missionLive, tick]);
+  }, [runState, tickClock]);
+
+  useEffect(() => {
+    if (!missionLive) return;
+    let frame = 0;
+    const loop = () => {
+      tickMissions(Date.now());
+      frame = window.requestAnimationFrame(loop);
+    };
+    frame = window.requestAnimationFrame(loop);
+    return () => window.cancelAnimationFrame(frame);
+  }, [missionLive, tickMissions]);
 
   useEffect(() => {
     if (!banner) return;
@@ -150,7 +163,7 @@ export function QuestodoroBoard() {
   useEffect(() => {
     if (!banner) return;
     if (banner.startsWith("WORK COMPLETE")) playPing("work");
-    if (banner.startsWith("MISSION COMPLETE")) playPing("mission");
+    if (banner.startsWith("MISSION COMPLETE") || banner.startsWith("MISSION DONE")) playPing("mission");
     if (banner.startsWith("BREAK DONE")) playPing("break");
   }, [banner]);
 
@@ -178,9 +191,17 @@ export function QuestodoroBoard() {
   const drillArmed = workSeconds === DRILL_WORK_SECONDS;
   const nextBlockXp = xpForWork(workSeconds);
   const fillPct = Math.min(100, (rank.intoLevel / rank.xpPerLevel) * 100);
-  const liveRuns = missionRuns.filter(
-    (run) => run.runState === "running" || run.runState === "paused",
-  );
+  const missionOrder = useMemo(() => {
+    const order = new Map<string, number>();
+    missions.forEach((mission, index) => order.set(mission.id, index));
+    return order;
+  }, [missions]);
+  const liveRuns = missionRuns
+    .filter((run) => run.runState === "running" || run.runState === "paused")
+    .slice()
+    .sort(
+      (a, b) => (missionOrder.get(a.id) ?? 0) - (missionOrder.get(b.id) ?? 0),
+    );
 
   async function onPostScore() {
     if (highScore < 1) {
@@ -248,7 +269,8 @@ export function QuestodoroBoard() {
           </div>
           <p className="font-display text-xs uppercase tracking-wider text-muted">
             Level {rank.level} · {rank.intoLevel} / {rank.xpPerLevel} · Work {nextBlockXp} XP ·
-            Mission +{MISSION_XP} XP
+            Side XP {sideXpToday}/{SIDE_XP_DAILY_CAP}
+            {sideXpToday >= SIDE_XP_DAILY_CAP ? " · Capped" : ""}
             {lastXpGain > 0 ? ` · Last work +${lastXpGain}` : ""}
             {lastMissionXp > 0 ? ` · Last mission +${lastMissionXp}` : ""}
           </p>
@@ -302,7 +324,9 @@ export function QuestodoroBoard() {
                     ? "Rest. Missions stay on demand."
                     : runState === "paused"
                       ? "Held. Resume when ready."
-                      : "Stand by. Start the work block.")}
+                      : phase === "work" && runState === "running"
+                        ? "On the line. Hold the block."
+                        : "Stand by. Start the work block.")}
               </p>
             </div>
 
@@ -362,6 +386,7 @@ export function QuestodoroBoard() {
             selectedId={selectedMissionId}
             completedIds={completedIds}
             missionStreak={missionStreak}
+            sideXpToday={sideXpToday}
             missionRuns={missionRuns}
             onSelect={selectMission}
             onAdd={addMission}

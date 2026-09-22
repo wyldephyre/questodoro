@@ -1,6 +1,6 @@
 import { Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { Mission } from "@/lib/questodoro/missions";
+import { xpForMission, type Mission } from "@/lib/questodoro/missions";
 import type { MissionRun } from "@/lib/questodoro/store";
 import { formatMmSs } from "@/lib/utils";
 
@@ -17,14 +17,16 @@ export function MissionRunClock({
 }) {
   const pct = Math.max(0, Math.min(100, (run.remainingMs / Math.max(1, run.totalMs)) * 100));
   const running = run.runState === "running";
+  const xp = mission ? xpForMission(mission.seconds) : 0;
   return (
     <div className="w-full rounded-lg bg-well p-3 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-ember)_45%,transparent)]">
       <div className="flex items-center justify-between gap-2">
         <p className="font-display text-xs font-semibold uppercase tracking-kicker text-ember">
-          Mission timer{mission ? ` · ${mission.title}` : ""}
+          Side{mission ? ` · ${mission.title}` : ""}
         </p>
         <p className="font-display text-xs uppercase tracking-wider text-muted">
           {running ? "Counting" : "Held"}
+          {xp > 0 ? ` · +${xp}` : ""}
         </p>
       </div>
       <div className="mt-2 flex items-center gap-3">

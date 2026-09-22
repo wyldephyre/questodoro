@@ -14,7 +14,10 @@ import {
   DEFAULT_REWARDS,
   MAX_MISSIONS,
   MAX_REWARDS,
+  MAX_LIVE_MISSIONS,
   MISSION_XP,
+  SIDE_XP_DAILY_CAP,
+  xpForMission,
   type BreakMission,
   type Mission,
   type Reward,
@@ -52,6 +55,7 @@ export type QuestStats = {
   blocksToday: number;
   nick: string;
   missionStreak: number;
+  sideXpToday: number;
 };
 
 type PersistShape = QuestStats & {
@@ -103,6 +107,10 @@ type QuestState = QuestStats & {
   setWorkMinutes: (minutes: number) => void;
   setBreakMinutes: (minutes: number) => void;
   armDrill: () => void;
+  /** Work/break clock only. Must not read or write side-mission runs. */
+  tickClock: (now: number) => void;
+  /** Side-mission clocks only. Must not write the work/break clock. */
+  tickMissions: (now: number) => void;
   tick: (now: number) => void;
   setNick: (nick: string) => void;
   clearBanner: () => void;
@@ -123,6 +131,7 @@ function defaultStats(): QuestStats {
     blocksToday: 0,
     nick: "",
     missionStreak: 0,
+    sideXpToday: 0,
   };
 }
 
@@ -137,6 +146,7 @@ function persistFields(state: PersistShape): PersistShape {
     blocksToday: state.blocksToday,
     nick: state.nick,
     missionStreak: state.missionStreak,
+    sideXpToday: state.sideXpToday,
     workSeconds: state.workSeconds,
     breakSeconds: state.breakSeconds,
     missions: state.missions,
@@ -168,6 +178,10 @@ function readPersist(): PersistShape | null {
       blocksToday,
       nick: typeof parsed.nick === "string" ? parsed.nick.slice(0, 16) : "",
       missionStreak: Math.max(0, Number(parsed.missionStreak) || 0),
+      sideXpToday:
+        parsed.todayDate === today
+          ? Math.min(SIDE_XP_DAILY_CAP, Math.max(0, Number(parsed.sideXpToday) || 0))
+          : 0,
     };
     const rewards = syncRewardUnlocks(parseRewards(parsed.rewards), {
       ...unlockContext(stats.totalXp, stats.streak, stats.missionStreak),
@@ -210,6 +224,7 @@ function rollDay(stats: QuestStats): QuestStats {
     todayDate: today,
     todayXp: 0,
     blocksToday: 0,
+    sideXpToday: 0,
   };
 }
 
@@ -262,8 +277,28 @@ function dropRun(runs: MissionRun[], id: string) {
   return runs.filter((run) => run.id !== id);
 }
 
-function upsertRun(runs: MissionRun[], run: MissionRun) {
-  return [...dropRun(runs, run.id), run];
+/** Insert or replace without moving the run. Tick used to append, which reshuffled the clocks under the work ring. */
+function replaceRun(runs: MissionRun[], run: MissionRun) {
+  const idx = runs.findIndex((item) => item.id === run.id);
+  if (idx < 0) return [...runs, run];
+  const next = runs.slice();
+  next[idx] = run;
+  return next;
+}
+
+function statPatch(stats: QuestStats): QuestStats {
+  return {
+    totalXp: stats.totalXp,
+    todayXp: stats.todayXp,
+    todayDate: stats.todayDate,
+    highScore: stats.highScore,
+    streak: stats.streak,
+    lastActiveDay: stats.lastActiveDay,
+    blocksToday: stats.blocksToday,
+    nick: stats.nick,
+    missionStreak: stats.missionStreak,
+    sideXpToday: stats.sideXpToday,
+  };
 }
 
 function awardMissionComplete(s: QuestState, id: string): Partial<QuestState> {
@@ -272,7 +307,13 @@ function awardMissionComplete(s: QuestState, id: string): Partial<QuestState> {
   if (!mission) return { missionRuns };
   if (s.completedIds.includes(id)) return { missionRuns };
 
-  const stats = applyBonusXp(s, MISSION_XP);
+  const rolled = rollDay(s);
+  const room = Math.max(0, SIDE_XP_DAILY_CAP - rolled.sideXpToday);
+  const awarded = Math.min(xpForMission(mission.seconds), room);
+  const stats =
+    awarded > 0
+      ? { ...applyBonusXp(rolled, awarded), sideXpToday: rolled.sideXpToday + awarded }
+      : { ...rolled, sideXpToday: rolled.sideXpToday };
   const next = withUnlocks({
     ...s,
     ...stats,
@@ -282,14 +323,20 @@ function awardMissionComplete(s: QuestState, id: string): Partial<QuestState> {
   });
   writePersist(persistFields(next));
   return {
-    ...next,
+    ...statPatch(next),
+    rewards: next.rewards,
+    selectedMissionId: next.selectedMissionId,
+    completedIds: next.completedIds,
     missionRuns,
-    lastMissionXp: MISSION_XP,
-    banner: `MISSION COMPLETE: ${mission.title.toUpperCase()}. +${MISSION_XP} XP.`,
+    lastMissionXp: awarded,
+    banner:
+      awarded <= 0
+        ? `MISSION DONE: ${mission.title.toUpperCase()}. SIDE XP CAPPED (${SIDE_XP_DAILY_CAP}/DAY).`
+        : `MISSION COMPLETE: ${mission.title.toUpperCase()}. +${awarded} XP.`,
   };
 }
 
-function beginBreakFromWork(s: QuestState, stats: QuestStats, workXp: number) {
+function beginBreakFromWork(s: QuestState, stats: QuestStats, workXp: number, now: number) {
   const picked = pickMission(s.missions, s.rotateIndex, s.selectedMissionId);
   const next = withUnlocks({
     ...s,
@@ -303,14 +350,16 @@ function beginBreakFromWork(s: QuestState, stats: QuestStats, workXp: number) {
     completedIds: s.completedIds,
   });
   writePersist(persistFields(next));
+  // Clock fields only. Side runs stay on their own engine.
   return {
-    ...next,
+    ...statPatch(next),
+    rewards: next.rewards,
+    selectedMissionId: next.selectedMissionId,
     phase: "break" as const,
     runState: "running" as const,
     remainingMs: s.breakSeconds * 1000,
-    endsAt: Date.now() + s.breakSeconds * 1000,
+    endsAt: now + s.breakSeconds * 1000,
     lastXpGain: workXp,
-    lastMissionXp: s.lastMissionXp,
     breakMission: null,
     banner: `WORK COMPLETE. +${workXp} XP. REST STARTED.`,
   };
@@ -509,6 +558,13 @@ export const useQuestStore = create<QuestState>((set, get) => ({
     if (!mission) return;
     const existing = s.missionRuns.find((run) => run.id === id);
     if (existing?.runState === "running") return;
+    const liveCount = s.missionRuns.filter(
+      (run) => run.runState === "running" || run.runState === "paused",
+    ).length;
+    if (!existing && liveCount >= MAX_LIVE_MISSIONS) {
+      set({ banner: "MAX 3 SIDE MISSIONS LIVE." });
+      return;
+    }
     const remaining =
       existing?.runState === "paused"
         ? Math.max(0, existing.remainingMs)
@@ -527,9 +583,9 @@ export const useQuestStore = create<QuestState>((set, get) => ({
     };
     set({
       selectedMissionId: id,
-      missionRuns: upsertRun(s.missionRuns, run),
+      missionRuns: replaceRun(s.missionRuns, run),
       completedIds: s.completedIds.filter((item) => item !== id),
-      banner: `MISSION LIVE: ${mission.title.toUpperCase()}.`,
+      banner: `SIDE MISSION LIVE: ${mission.title.toUpperCase()}.`,
     });
   },
 
@@ -539,7 +595,7 @@ export const useQuestStore = create<QuestState>((set, get) => ({
     if (!existing || existing.runState !== "running") return;
     const remaining = Math.max(0, (existing.endsAt ?? Date.now()) - Date.now());
     set({
-      missionRuns: upsertRun(s.missionRuns, {
+      missionRuns: replaceRun(s.missionRuns, {
         ...existing,
         runState: "paused",
         remainingMs: remaining,
@@ -689,55 +745,58 @@ export const useQuestStore = create<QuestState>((set, get) => ({
     persistNow();
   },
 
-  tick: (now: number) => {
+  tickClock: (now: number) => {
     const s = get();
-    let next: QuestState = s;
+    if (s.runState !== "running" || s.endsAt == null) return;
+    const remaining = Math.max(0, s.endsAt - now);
+    if (remaining <= 0) {
+      if (s.phase === "work") {
+        const xp = xpForWork(s.workSeconds);
+        const stats = applyWorkComplete(s, xp);
+        set(beginBreakFromWork(s, stats, xp, now));
+      } else {
+        set({
+          phase: "idle",
+          runState: "stopped",
+          remainingMs: s.workSeconds * 1000,
+          endsAt: null,
+          breakMission: null,
+          banner: "BREAK DONE. START THE NEXT BLOCK.",
+        });
+      }
+      return;
+    }
+    if (Math.abs(remaining - s.remainingMs) >= 200) {
+      set({ remainingMs: remaining });
+    }
+  },
+
+  tickMissions: (now: number) => {
+    const s = get();
+    const expired: string[] = [];
     let changed = false;
-
-    if (s.runState === "running" && s.endsAt != null) {
-      const remaining = Math.max(0, s.endsAt - now);
-      if (remaining <= 0) {
-        if (s.phase === "work") {
-          const xp = xpForWork(s.workSeconds);
-          const stats = applyWorkComplete(s, xp);
-          next = { ...s, ...beginBreakFromWork(s, stats, xp) };
-        } else {
-          next = {
-            ...s,
-            phase: "idle",
-            runState: "stopped",
-            remainingMs: s.workSeconds * 1000,
-            endsAt: null,
-            breakMission: null,
-            banner: "BREAK DONE. START THE NEXT BLOCK.",
-          };
-        }
-        changed = true;
-      } else if (Math.abs(remaining - s.remainingMs) >= 200) {
-        next = { ...next, remainingMs: remaining };
-        changed = true;
+    const missionRuns = s.missionRuns.map((run) => {
+      if (run.runState !== "running" || run.endsAt == null) return run;
+      const left = Math.max(0, run.endsAt - now);
+      if (left <= 0) {
+        expired.push(run.id);
+        return run;
       }
-    }
-
-    let missionRuns = next.missionRuns;
-    let missionChanged = false;
-    for (const run of missionRuns) {
-      if (run.runState !== "running" || run.endsAt == null) continue;
-      const missionRemaining = Math.max(0, run.endsAt - now);
-      if (missionRemaining <= 0) {
-        next = { ...next, missionRuns, ...awardMissionComplete({ ...next, missionRuns }, run.id) };
-        missionRuns = next.missionRuns ?? dropRun(missionRuns, run.id);
-        missionChanged = true;
+      if (Math.abs(left - run.remainingMs) >= 200) {
         changed = true;
-      } else if (Math.abs(missionRemaining - run.remainingMs) >= 200) {
-        missionRuns = upsertRun(missionRuns, { ...run, remainingMs: missionRemaining });
-        missionChanged = true;
-        changed = true;
+        return { ...run, remainingMs: left };
       }
+      return run;
+    });
+    if (changed) set({ missionRuns });
+    for (const id of expired) {
+      set(awardMissionComplete(get(), id));
     }
-    if (missionChanged) next = { ...next, missionRuns };
+  },
 
-    if (changed) set(next);
+  tick: (now: number) => {
+    get().tickClock(now);
+    get().tickMissions(now);
   },
 
   setNick: (nick: string) => {

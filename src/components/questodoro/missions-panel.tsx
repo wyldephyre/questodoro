@@ -2,11 +2,13 @@ import { Check, ChevronDown, ChevronUp, Crosshair, Minus, Pause, Play, Plus, Tra
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  MAX_LIVE_MISSIONS,
   MAX_MISSIONS,
   MISSION_LENGTH_MAX,
   MISSION_LENGTH_MIN,
   MISSION_LENGTH_STEP,
-  MISSION_XP,
+  SIDE_XP_DAILY_CAP,
+  xpForMission,
   type Mission,
 } from "@/lib/questodoro/missions";
 import type { MissionRun } from "@/lib/questodoro/store";
@@ -17,6 +19,7 @@ export function MissionsPanel({
   selectedId,
   completedIds,
   missionStreak,
+  sideXpToday,
   missionRuns,
   onSelect,
   onAdd,
@@ -32,6 +35,7 @@ export function MissionsPanel({
   selectedId: string | null;
   completedIds: string[];
   missionStreak: number;
+  sideXpToday: number;
   missionRuns: MissionRun[];
   onSelect: (id: string) => void;
   onAdd: () => void;
@@ -43,6 +47,10 @@ export function MissionsPanel({
   onComplete: (id: string) => void;
   className?: string;
 }) {
+  const liveCount = missionRuns.filter(
+    (run) => run.runState === "running" || run.runState === "paused",
+  ).length;
+  const sideCapped = sideXpToday >= SIDE_XP_DAILY_CAP;
   return (
     <section
       className={cn(
@@ -58,11 +66,12 @@ export function MissionsPanel({
           </h2>
         </div>
         <p className="font-display text-xs uppercase tracking-wider text-muted">
-          {missionStreak} in a row
+          {liveCount}/{MAX_LIVE_MISSIONS} live · {missionStreak} in a row
         </p>
       </div>
       <p className="mt-1 text-xs text-muted">
-        On demand. Start whenever. Independent of the work clock. +{MISSION_XP} XP on complete.
+        On demand. Own clocks. Max {MAX_LIVE_MISSIONS} at once. Side XP{" "}
+        {sideCapped ? "capped" : `${sideXpToday}/${SIDE_XP_DAILY_CAP}`} today.
       </p>
 
       <ol className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto">
@@ -74,6 +83,8 @@ export function MissionsPanel({
           const running = run?.runState === "running";
           const paused = run?.runState === "paused";
           const remaining = run ? run.remainingMs : mission.seconds * 1000;
+          const missionXp = xpForMission(mission.seconds);
+          const atLiveCap = !run && liveCount >= MAX_LIVE_MISSIONS;
           return (
             <li
               key={mission.id}
@@ -190,6 +201,9 @@ export function MissionsPanel({
                     )}
                   </div>
                 </div>
+                <span className="w-12 shrink-0 text-right font-display text-xs tabular-nums text-olive">
+                  +{missionXp}
+                </span>
                 {running ? (
                   <Button
                     type="button"
@@ -206,7 +220,7 @@ export function MissionsPanel({
                     type="button"
                     size="compact"
                     className="shrink-0"
-                    disabled={running}
+                    disabled={running || atLiveCap}
                     onClick={() => onStart(mission.id)}
                   >
                     <Play />
