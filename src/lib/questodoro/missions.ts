@@ -2,6 +2,8 @@ import { rankFromXp } from "@/lib/questodoro/rules";
 
 export const MISSION_XP = 8;
 export const MAX_MISSIONS = 8;
+export const MAX_LIVE_MISSIONS = 3;
+export const SIDE_XP_DAILY_CAP = 100;
 export const MAX_REWARDS = 8;
 export const MISSION_LENGTH_MIN = 5;
 export const MISSION_LENGTH_MAX = 600;
@@ -104,6 +106,11 @@ export function liveMissions(missions: Mission[]) {
 export function clampMissionSeconds(seconds: number) {
   const stepped = Math.round(seconds / MISSION_LENGTH_STEP) * MISSION_LENGTH_STEP;
   return Math.min(MISSION_LENGTH_MAX, Math.max(MISSION_LENGTH_MIN, stepped));
+}
+
+/** 1 XP per 5 seconds, bounded to 2–20. Daily side total is capped separately. */
+export function xpForMission(seconds: number) {
+  return Math.min(20, Math.max(2, Math.round(clampMissionSeconds(seconds) / 5)));
 }
 
 export function pickMission(
