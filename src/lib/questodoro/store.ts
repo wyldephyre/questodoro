@@ -34,6 +34,52 @@ import {
 
 const STORAGE_KEY = "questodoro:v1";
 
+export type DailyRollup = {
+  dateKey: string;
+  workXp: number;
+  sideXp: number;
+  totalXp: number;
+  workBlocksFinished: number;
+  focusMinutes: number;
+};
+
+export function yesterdayQuip(todayTotal: number, yesterdayTotal: number | null) {
+  if (yesterdayTotal == null || todayTotal === yesterdayTotal) {
+    return "First blood today. Make it count.";
+  }
+  if (todayTotal > yesterdayTotal) return "Beating yesterday. Hold the line.";
+  return "Yesterday's still winning. Catch up.";
+}
+
+function emptyRollup(dateKey: string): DailyRollup {
+  return {
+    dateKey,
+    workXp: 0,
+    sideXp: 0,
+    totalXp: 0,
+    workBlocksFinished: 0,
+    focusMinutes: 0,
+  };
+}
+
+function parseRollup(raw: unknown): DailyRollup | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Partial<DailyRollup>;
+  if (typeof row.dateKey !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(row.dateKey)) {
+    return null;
+  }
+  const workXp = Math.max(0, Math.floor(Number(row.workXp) || 0));
+  const sideXp = Math.max(0, Math.floor(Number(row.sideXp) || 0));
+  const storedTotal = Math.max(0, Math.floor(Number(row.totalXp) || 0));
+  return {
+    dateKey: row.dateKey,
+    workXp,
+    sideXp,
+    totalXp: storedTotal > 0 ? storedTotal : workXp + sideXp,
+    workBlocksFinished: Math.max(0, Math.floor(Number(row.workBlocksFinished) || 0)),
+    focusMinutes: Math.max(0, Math.floor(Number(row.focusMinutes) || 0)),
+  };
+}
 export type Phase = "idle" | "work" | "break";
 export type RunState = "stopped" | "running" | "paused";
 
@@ -53,9 +99,10 @@ export type QuestStats = {
   streak: number;
   lastActiveDay: string | null;
   blocksToday: number;
-  nick: string;
   missionStreak: number;
   sideXpToday: number;
+  todayRollup: DailyRollup;
+  yesterday: DailyRollup | null;
 };
 
 type PersistShape = QuestStats & {
@@ -112,7 +159,8 @@ type QuestState = QuestStats & {
   /** Side-mission clocks only. Must not write the work/break clock. */
   tickMissions: (now: number) => void;
   tick: (now: number) => void;
-  setNick: (nick: string) => void;
+  /** Snapshot yesterday if the local calendar day changed. Does not touch clocks. */
+  rollIfNeeded: () => void;
   clearBanner: () => void;
 };
 
@@ -121,17 +169,19 @@ export function isAwaitingCheckIn(phase: Phase, runState: RunState) {
 }
 
 function defaultStats(): QuestStats {
+  const today = localDay();
   return {
     totalXp: 0,
     todayXp: 0,
-    todayDate: localDay(),
+    todayDate: today,
     highScore: 0,
     streak: 0,
     lastActiveDay: null,
     blocksToday: 0,
-    nick: "",
     missionStreak: 0,
     sideXpToday: 0,
+    todayRollup: emptyRollup(today),
+    yesterday: null,
   };
 }
 
@@ -144,9 +194,10 @@ function persistFields(state: PersistShape): PersistShape {
     streak: state.streak,
     lastActiveDay: state.lastActiveDay,
     blocksToday: state.blocksToday,
-    nick: state.nick,
     missionStreak: state.missionStreak,
     sideXpToday: state.sideXpToday,
+    todayRollup: state.todayRollup,
+    yesterday: state.yesterday,
     workSeconds: state.workSeconds,
     breakSeconds: state.breakSeconds,
     missions: state.missions,
@@ -164,25 +215,40 @@ function readPersist(): PersistShape | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PersistShape>;
     const today = localDay();
-    const todayXp = parsed.todayDate === today ? Number(parsed.todayXp) || 0 : 0;
-    const blocksToday =
-      parsed.todayDate === today ? Number(parsed.blocksToday) || 0 : 0;
+    const storedDate =
+      typeof parsed.todayDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.todayDate)
+        ? parsed.todayDate
+        : today;
+    const rawTodayXp = Math.max(0, Number(parsed.todayXp) || 0);
+    const rawBlocks = Math.max(0, Number(parsed.blocksToday) || 0);
+    const rawSide = Math.min(
+      SIDE_XP_DAILY_CAP,
+      Math.max(0, Number(parsed.sideXpToday) || 0),
+    );
     const missions = parseMissions(parsed.missions);
-    const stats: QuestStats = {
+    const legacyRollup: DailyRollup = {
+      dateKey: storedDate,
+      sideXp: rawSide,
+      workXp: Math.max(0, rawTodayXp - rawSide),
+      totalXp: rawTodayXp,
+      workBlocksFinished: rawBlocks,
+      focusMinutes: 0,
+    };
+    const parsedBag = parsed as PersistShape & { todayRollup?: unknown; yesterday?: unknown };
+    const todayRollup = parseRollup(parsedBag.todayRollup) ?? legacyRollup;
+    const stats = rollDay({
       totalXp: Math.max(0, Number(parsed.totalXp) || 0),
-      todayXp,
-      todayDate: today,
+      todayXp: rawTodayXp,
+      todayDate: storedDate,
       highScore: Math.max(0, Number(parsed.highScore) || 0),
       streak: Math.max(0, Number(parsed.streak) || 0),
       lastActiveDay: parsed.lastActiveDay ?? null,
-      blocksToday,
-      nick: typeof parsed.nick === "string" ? parsed.nick.slice(0, 16) : "",
+      blocksToday: rawBlocks,
       missionStreak: Math.max(0, Number(parsed.missionStreak) || 0),
-      sideXpToday:
-        parsed.todayDate === today
-          ? Math.min(SIDE_XP_DAILY_CAP, Math.max(0, Number(parsed.sideXpToday) || 0))
-          : 0,
-    };
+      sideXpToday: rawSide,
+      todayRollup: todayRollup.dateKey === storedDate ? todayRollup : legacyRollup,
+      yesterday: parseRollup(parsedBag.yesterday),
+    });
     const rewards = syncRewardUnlocks(parseRewards(parsed.rewards), {
       ...unlockContext(stats.totalXp, stats.streak, stats.missionStreak),
       today,
@@ -218,26 +284,39 @@ function writePersist(state: PersistShape) {
 
 function rollDay(stats: QuestStats): QuestStats {
   const today = localDay();
-  if (stats.todayDate === today) return stats;
+  const yKey = shiftDay(today, -1);
+  const yesterdayOk =
+    stats.yesterday && stats.yesterday.dateKey === yKey ? stats.yesterday : null;
+
+  if (stats.todayDate === today) {
+    const rollup =
+      stats.todayRollup.dateKey === today ? stats.todayRollup : emptyRollup(today);
+    if (rollup === stats.todayRollup && yesterdayOk === stats.yesterday) return stats;
+    return { ...stats, todayRollup: rollup, yesterday: yesterdayOk };
+  }
+
   return {
     ...stats,
     todayDate: today,
     todayXp: 0,
     blocksToday: 0,
     sideXpToday: 0,
+    todayRollup: emptyRollup(today),
+    yesterday: stats.todayDate === yKey ? { ...stats.todayRollup, dateKey: yKey } : null,
   };
 }
 
-function applyWorkComplete(stats: QuestStats, xp: number): QuestStats {
+function applyWorkComplete(stats: QuestStats, xp: number, workSeconds: number): QuestStats {
   const rolled = rollDay(stats);
   const today = rolled.todayDate;
-  const yesterday = shiftDay(today, -1);
+  const yesterdayKey = shiftDay(today, -1);
   const firstToday = rolled.lastActiveDay !== today;
   let streak = rolled.streak;
   if (firstToday) {
-    streak = rolled.lastActiveDay === yesterday ? rolled.streak + 1 : 1;
+    streak = rolled.lastActiveDay === yesterdayKey ? rolled.streak + 1 : 1;
   }
   const todayXp = rolled.todayXp + xp;
+  const focusMinutes = Math.max(1, Math.round(workSeconds / 60));
   return {
     ...rolled,
     totalXp: rolled.totalXp + xp,
@@ -246,6 +325,14 @@ function applyWorkComplete(stats: QuestStats, xp: number): QuestStats {
     streak,
     lastActiveDay: today,
     blocksToday: rolled.blocksToday + 1,
+    todayRollup: {
+      dateKey: today,
+      workXp: rolled.todayRollup.workXp + xp,
+      sideXp: rolled.todayRollup.sideXp,
+      totalXp: rolled.todayRollup.totalXp + xp,
+      workBlocksFinished: rolled.todayRollup.workBlocksFinished + 1,
+      focusMinutes: rolled.todayRollup.focusMinutes + focusMinutes,
+    },
   };
 }
 
@@ -257,6 +344,11 @@ function applyBonusXp(stats: QuestStats, xp: number): QuestStats {
     totalXp: rolled.totalXp + xp,
     todayXp,
     highScore: Math.max(rolled.highScore, todayXp),
+    todayRollup: {
+      ...rolled.todayRollup,
+      dateKey: rolled.todayDate,
+      totalXp: rolled.todayRollup.totalXp + xp,
+    },
   };
 }
 
@@ -295,9 +387,10 @@ function statPatch(stats: QuestStats): QuestStats {
     streak: stats.streak,
     lastActiveDay: stats.lastActiveDay,
     blocksToday: stats.blocksToday,
-    nick: stats.nick,
     missionStreak: stats.missionStreak,
     sideXpToday: stats.sideXpToday,
+    todayRollup: stats.todayRollup,
+    yesterday: stats.yesterday,
   };
 }
 
@@ -310,10 +403,15 @@ function awardMissionComplete(s: QuestState, id: string): Partial<QuestState> {
   const rolled = rollDay(s);
   const room = Math.max(0, SIDE_XP_DAILY_CAP - rolled.sideXpToday);
   const awarded = Math.min(xpForMission(mission.seconds), room);
-  const stats =
-    awarded > 0
-      ? { ...applyBonusXp(rolled, awarded), sideXpToday: rolled.sideXpToday + awarded }
-      : { ...rolled, sideXpToday: rolled.sideXpToday };
+  const bonus = awarded > 0 ? applyBonusXp(rolled, awarded) : rolled;
+  const stats: QuestStats = {
+    ...bonus,
+    sideXpToday: rolled.sideXpToday + awarded,
+    todayRollup: {
+      ...bonus.todayRollup,
+      sideXp: bonus.todayRollup.sideXp + awarded,
+    },
+  };
   const next = withUnlocks({
     ...s,
     ...stats,
@@ -455,6 +553,7 @@ export const useQuestStore = create<QuestState>((set, get) => ({
       missionRuns: [],
       hydrated: true,
     });
+    persistNow();
   },
 
   start: () => {
@@ -752,7 +851,7 @@ export const useQuestStore = create<QuestState>((set, get) => ({
     if (remaining <= 0) {
       if (s.phase === "work") {
         const xp = xpForWork(s.workSeconds);
-        const stats = applyWorkComplete(s, xp);
+        const stats = applyWorkComplete(s, xp, s.workSeconds);
         set(beginBreakFromWork(s, stats, xp, now));
       } else {
         set({
@@ -799,8 +898,27 @@ export const useQuestStore = create<QuestState>((set, get) => ({
     get().tickMissions(now);
   },
 
-  setNick: (nick: string) => {
-    set({ nick: nick.slice(0, 16) });
+  rollIfNeeded: () => {
+    const s = get();
+    const rolled = rollDay(s);
+    if (
+      rolled.todayDate === s.todayDate &&
+      rolled.todayXp === s.todayXp &&
+      rolled.blocksToday === s.blocksToday &&
+      rolled.sideXpToday === s.sideXpToday &&
+      rolled.todayRollup === s.todayRollup &&
+      rolled.yesterday === s.yesterday
+    ) {
+      return;
+    }
+    const rewards = syncRewardUnlocks(s.rewards, {
+      ...unlockContext(rolled.totalXp, rolled.streak, rolled.missionStreak),
+      today: rolled.todayDate,
+    });
+    set({
+      ...statPatch(rolled),
+      rewards,
+    });
     persistNow();
   },
 

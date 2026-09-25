@@ -1,13 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import {
   Pause,
   Play,
   RotateCcw,
-  Send,
   Target,
-  Trophy,
 } from "lucide-react";
-import { toast, Toaster } from "sonner";
 import { DurationStepper } from "@/components/questodoro/duration-stepper";
 import { MissionRunClock } from "@/components/questodoro/mission-run-clock";
 import { MissionsPanel } from "@/components/questodoro/missions-panel";
@@ -15,12 +12,6 @@ import { PhyreMark } from "@/components/questodoro/mark";
 import { RewardsShelf } from "@/components/questodoro/rewards-shelf";
 import { TimerRing } from "@/components/questodoro/timer-ring";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  getLeaderboard,
-  postScore,
-  type BoardRow,
-} from "@/lib/questodoro/leaderboard";
 import { SIDE_XP_DAILY_CAP } from "@/lib/questodoro/missions";
 import {
   DRILL_WORK_SECONDS,
@@ -29,6 +20,7 @@ import {
 } from "@/lib/questodoro/rules";
 import {
   useQuestStore,
+  yesterdayQuip,
 } from "@/lib/questodoro/store";
 import { cn, formatMmSs } from "@/lib/utils";
 
@@ -86,7 +78,6 @@ export function QuestodoroBoard() {
   const highScore = useQuestStore((s) => s.highScore);
   const streak = useQuestStore((s) => s.streak);
   const blocksToday = useQuestStore((s) => s.blocksToday);
-  const nick = useQuestStore((s) => s.nick);
   const banner = useQuestStore((s) => s.banner);
   const lastXpGain = useQuestStore((s) => s.lastXpGain);
   const lastMissionXp = useQuestStore((s) => s.lastMissionXp);
@@ -117,14 +108,10 @@ export function QuestodoroBoard() {
   const armDrill = useQuestStore((s) => s.armDrill);
   const tickClock = useQuestStore((s) => s.tickClock);
   const tickMissions = useQuestStore((s) => s.tickMissions);
-  const setNick = useQuestStore((s) => s.setNick);
+  const rollIfNeeded = useQuestStore((s) => s.rollIfNeeded);
   const clearBanner = useQuestStore((s) => s.clearBanner);
-
-  const [rows, setRows] = useState<BoardRow[]>([]);
-  const [boardState, setBoardState] = useState<"loading" | "live" | "offline">(
-    "loading",
-  );
-  const [posting, setPosting] = useState(false);
+  const todayRollup = useQuestStore((s) => s.todayRollup);
+  const yesterday = useQuestStore((s) => s.yesterday);
 
   useEffect(() => {
     hydrate();
@@ -168,21 +155,9 @@ export function QuestodoroBoard() {
   }, [banner]);
 
   useEffect(() => {
-    let alive = true;
-    getLeaderboard()
-      .then((list) => {
-        if (!alive) return;
-        setRows(list);
-        setBoardState("live");
-      })
-      .catch(() => {
-        if (!alive) return;
-        setBoardState("offline");
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
+    const id = window.setInterval(() => rollIfNeeded(), 30_000);
+    return () => window.clearInterval(id);
+  }, [rollIfNeeded]);
 
   const rank = useMemo(() => rankFromXp(totalXp), [totalXp]);
   const totalMs =
@@ -203,39 +178,15 @@ export function QuestodoroBoard() {
       (a, b) => (missionOrder.get(a.id) ?? 0) - (missionOrder.get(b.id) ?? 0),
     );
 
-  async function onPostScore() {
-    if (highScore < 1) {
-      toast("Finish a work block first. High score is empty.");
-      return;
-    }
-    const handle = nick.trim();
-    if (handle.length < 2) {
-      toast("Need a nick (2–16 characters) to post.");
-      return;
-    }
-    setPosting(true);
-    try {
-      const list = await postScore({ data: { nick: handle, score: highScore } });
-      setRows(list);
-      setBoardState("live");
-      toast(`Posted ${highScore} XP as ${handle}.`);
-    } catch (err) {
-      setBoardState("offline");
-      toast(err instanceof Error ? err.message : "Board unreachable. Local score still counts.");
-    } finally {
-      setPosting(false);
-    }
-  }
+  const yesterdayTotal = yesterday ? yesterday.totalXp : null;
+  const todayTotal = todayRollup.totalXp;
+  const delta = yesterdayTotal == null ? null : todayTotal - yesterdayTotal;
+  const quip = yesterdayQuip(todayTotal, yesterdayTotal);
+  const quipTone =
+    yesterdayTotal == null ? "text-muted" : delta != null && delta < 0 ? "text-ember" : "text-olive";
 
   return (
     <main className="min-h-dvh bg-bg text-fg 2xl:h-dvh 2xl:overflow-hidden">
-      <Toaster
-        theme="dark"
-        position="bottom-center"
-        toastOptions={{
-          className: "font-sans !bg-surface !text-fg !border-border !rounded-md",
-        }}
-      />
       <div className="mx-auto flex min-h-dvh w-full max-w-board flex-col gap-5 px-4 py-4 2xl:h-dvh 2xl:gap-6 2xl:px-10 2xl:py-6">
         <header className="flex shrink-0 flex-col gap-4 border-b border-border pb-4 2xl:flex-row 2xl:items-end 2xl:justify-between">
           <div className="stagger-item flex items-center gap-4">
@@ -275,6 +226,43 @@ export function QuestodoroBoard() {
             {lastMissionXp > 0 ? ` · Last mission +${lastMissionXp}` : ""}
           </p>
         </div>
+
+        <section className="stagger-item flex shrink-0 flex-col gap-3 rounded-xl bg-surface px-4 py-3 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-fg)_10%,transparent)] sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="font-display text-xs font-semibold uppercase tracking-kicker text-muted">
+              Yesterday you
+            </p>
+            <p className={cn("font-display text-sm font-semibold uppercase tracking-wider", quipTone)}>
+              {quip}
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 sm:min-w-[22rem]">
+            <div className="rounded-md bg-well px-3 py-2">
+              <p className="font-display text-xs font-semibold uppercase tracking-kicker text-muted">
+                Today
+              </p>
+              <p className="font-display text-2xl font-semibold leading-none tabular-nums text-fg">
+                {todayTotal}
+              </p>
+            </div>
+            <div className="rounded-md bg-well px-3 py-2">
+              <p className="font-display text-xs font-semibold uppercase tracking-kicker text-muted">
+                Yesterday
+              </p>
+              <p className="font-display text-2xl font-semibold leading-none tabular-nums text-fg">
+                {yesterdayTotal == null ? "--" : yesterdayTotal}
+              </p>
+            </div>
+            <div className="rounded-md bg-well px-3 py-2">
+              <p className="font-display text-xs font-semibold uppercase tracking-kicker text-muted">
+                Delta
+              </p>
+              <p className={cn("font-display text-2xl font-semibold leading-none tabular-nums", quipTone)}>
+                {delta == null ? "--" : `${delta > 0 ? "+" : ""}${delta}`}
+              </p>
+            </div>
+          </div>
+        </section>
 
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-5 2xl:grid-cols-3 2xl:gap-5">
           <section className="stagger-item flex min-h-0 flex-col gap-4 rounded-xl bg-surface p-4 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-fg)_10%,transparent)] 2xl:p-6">
@@ -398,98 +386,14 @@ export function QuestodoroBoard() {
             onComplete={completeMission}
           />
 
-          <div className="stagger-item flex min-h-0 flex-col gap-5">
-            <RewardsShelf
-              className="flex-1"
-              rewards={rewards}
-              onAdd={addReward}
-              onRename={updateRewardTitle}
-              onRemove={removeReward}
-              onClaim={claimReward}
-            />
-
-            <section className="flex min-h-0 flex-1 flex-col rounded-xl bg-surface p-5 shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-fg)_10%,transparent)]">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Trophy className="size-4 text-olive" />
-                  <h2 className="font-display text-sm font-semibold uppercase tracking-kicker text-fg">
-                    Field board
-                  </h2>
-                </div>
-                <p className="font-display text-xs uppercase tracking-wider text-muted">
-                  {boardState === "offline"
-                    ? "Offline"
-                    : boardState === "loading"
-                      ? "Linking"
-                      : "Live"}
-                </p>
-              </div>
-
-              <ol className="mt-3 min-h-0 flex-1 space-y-1 overflow-auto">
-                {boardState === "loading" ? (
-                  <li className="text-sm text-muted">Pulling the board…</li>
-                ) : rows.length === 0 ? (
-                  <li className="text-sm text-muted">
-                    No names on the board. Post first.
-                  </li>
-                ) : (
-                  rows.map((row, i) => (
-                    <li
-                      key={`${row.nick}-${row.score}`}
-                      className="flex items-center justify-between gap-3 rounded-sm bg-well px-3 py-2"
-                    >
-                      <span className="flex min-w-0 items-baseline gap-3">
-                        <span className="w-5 font-display text-sm tabular-nums text-muted">
-                          {i + 1}
-                        </span>
-                        <span className="truncate font-display text-sm font-semibold uppercase tracking-wider">
-                          {row.nick}
-                        </span>
-                      </span>
-                      <span className="font-display text-sm tabular-nums text-olive">
-                        {row.score}
-                      </span>
-                    </li>
-                  ))
-                )}
-              </ol>
-
-              {boardState === "offline" ? (
-                <p className="mt-2 text-xs text-ember">
-                  Board unreachable. Local score still counts on this device.
-                </p>
-              ) : null}
-
-              <form
-                className="mt-3 flex gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void onPostScore();
-                }}
-              >
-                <label className="sr-only" htmlFor="quest-nick">
-                  Nick
-                </label>
-                <Input
-                  id="quest-nick"
-                  name="nick"
-                  autoComplete="nickname"
-                  placeholder="Optional nick"
-                  value={nick}
-                  maxLength={16}
-                  onChange={(event) => setNick(event.target.value)}
-                />
-                <Button
-                  type="submit"
-                  variant="secondary"
-                  disabled={posting || highScore < 1}
-                >
-                  <Send />
-                  Post score
-                </Button>
-              </form>
-            </section>
-          </div>
+          <RewardsShelf
+            className="stagger-item h-full min-h-0 flex-1"
+            rewards={rewards}
+            onAdd={addReward}
+            onRename={updateRewardTitle}
+            onRemove={removeReward}
+            onClaim={claimReward}
+          />
         </div>
       </div>
     </main>
